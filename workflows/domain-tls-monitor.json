@@ -1,0 +1,91 @@
+{
+  "name": "Production - Domain and TLS Monitor",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "30 7 * * *"}]}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls001",
+      "name": "Every Day",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-780, 200]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"domains\": [\"example.com\", \"example.org\"],\n  \"warning_days\": 30,\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-560, 200]
+    },
+    {
+      "parameters": {"jsCode": "const domains = $('Config').first().json.domains;\nif (!Array.isArray(domains)) throw new Error('Config.domains must be an array');\nreturn domains.map(domain => String(domain).trim().toLowerCase()).filter(domain => /^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(domain)).map(domain => ({ json: { domain } }));"},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls003",
+      "name": "Expand Domains",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-340, 200]
+    },
+    {
+      "parameters": {"url": "=https://rdap.org/domain/{{ $json.domain }}", "options": {"timeout": 20000, "response": {"response": {"neverError": true}}}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls004",
+      "name": "RDAP Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-100, 120],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"url": "=https://{{ $('Expand Domains').item.json.domain }}/", "options": {"timeout": 15000, "response": {"response": {"fullResponse": true, "neverError": true, "responseFormat": "text"}}}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls005",
+      "name": "TLS HTTPS Probe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [140, 120],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst domains = $('Expand Domains').all();\nconst rdap = $('RDAP Lookup').all();\nreturn $input.all().map((probe, index) => {\n  const domain = domains[index]?.json?.domain || 'unknown';\n  const events = Array.isArray(rdap[index]?.json?.events) ? rdap[index].json.events : [];\n  const expiryEvent = events.find(event => /expir/i.test(String(event.eventAction || '')));\n  const expires = expiryEvent?.eventDate ? new Date(expiryEvent.eventDate) : null;\n  const days = expires && !Number.isNaN(expires.valueOf()) ? Math.ceil((expires.valueOf() - Date.now()) / 86400000) : null;\n  const status = Number(probe.json?.statusCode ?? probe.json?.status ?? 0);\n  const tlsReachable = status >= 200 && status < 500 && !probe.json?.error;\n  const domainWarning = days !== null && days <= Number(cfg.warning_days || 30);\n  const shouldAlert = domainWarning || !tlsReachable;\n  const reasons = [];\n  if (domainWarning) reasons.push(`registration expires in ${days} days`);\n  if (!tlsReachable) reasons.push('HTTPS/TLS probe failed');\n  return { json: { domain, registration_expires_at: expires?.toISOString() || null, days_remaining: days, tls_reachable: tlsReachable, should_alert: shouldAlert, content: shouldAlert ? `⚠️ **${domain}**: ${reasons.join('; ')}.` : '' } };\n});"},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls006",
+      "name": "Evaluate Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 120]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "domain-tls-condition", "leftValue": "={{ $json.should_alert }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls007",
+      "name": "Needs Attention?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [620, 120]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "2c3d4e5f-3333-4000-8000-domaintls008",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [860, 20],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every Day": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Expand Domains", "type": "main", "index": 0}]]},
+    "Expand Domains": {"main": [[{"node": "RDAP Lookup", "type": "main", "index": 0}]]},
+    "RDAP Lookup": {"main": [[{"node": "TLS HTTPS Probe", "type": "main", "index": 0}]]},
+    "TLS HTTPS Probe": {"main": [[{"node": "Evaluate Domain", "type": "main", "index": 0}]]},
+    "Evaluate Domain": {"main": [[{"node": "Needs Attention?", "type": "main", "index": 0}]]},
+    "Needs Attention?": {"main": [[{"node": "Send Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}

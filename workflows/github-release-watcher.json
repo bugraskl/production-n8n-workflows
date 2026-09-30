@@ -1,0 +1,78 @@
+{
+  "name": "Production - GitHub Release Watcher",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}},
+      "id": "3d4e5f6a-4444-4000-8000-release00001",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 200]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"repositories\": [\"n8n-io/n8n\", \"docker/compose\"],\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "3d4e5f6a-4444-4000-8000-release00002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-480, 200]
+    },
+    {
+      "parameters": {"jsCode": "const repos = $('Config').first().json.repositories;\nif (!Array.isArray(repos)) throw new Error('Config.repositories must be an array');\nreturn repos.map(repo => String(repo).trim()).filter(repo => /^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$/.test(repo)).map(repo => ({ json: { repo } }));"},
+      "id": "3d4e5f6a-4444-4000-8000-release00003",
+      "name": "Expand Repositories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-260, 200]
+    },
+    {
+      "parameters": {"url": "=https://api.github.com/repos/{{ $json.repo }}/releases/latest", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Accept", "value": "application/vnd.github+json"}, {"name": "X-GitHub-Api-Version", "value": "2022-11-28"}, {"name": "User-Agent", "value": "production-n8n-workflows/1.0 release-watcher"}]}, "options": {"timeout": 20000, "response": {"response": {"neverError": true}}}},
+      "id": "3d4e5f6a-4444-4000-8000-release00004",
+      "name": "Latest Release",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-20, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const repos = $('Expand Repositories').all();\nconst state = $getWorkflowStaticData('global');\nstate.releaseTags = state.releaseTags || {};\nreturn $input.all().map((item, index) => {\n  const repo = repos[index]?.json?.repo || 'unknown';\n  const tag = item.json?.tag_name || null;\n  const previous = state.releaseTags[repo] || null;\n  const changed = Boolean(tag && previous && tag !== previous);\n  if (tag) state.releaseTags[repo] = tag;\n  return { json: { repo, tag, previous_tag: previous, changed, baseline_created: Boolean(tag && !previous), url: item.json?.html_url || `https://github.com/${repo}/releases`, content: changed ? `🚀 **${repo}** published **${tag}** (previously ${previous}).\n${item.json?.html_url}` : '' } };\n});"},
+      "id": "3d4e5f6a-4444-4000-8000-release00005",
+      "name": "Compare Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "release-condition", "leftValue": "={{ $json.changed }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "3d4e5f6a-4444-4000-8000-release00006",
+      "name": "New Release?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "3d4e5f6a-4444-4000-8000-release00007",
+      "name": "Send Release Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [700, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Expand Repositories", "type": "main", "index": 0}]]},
+    "Expand Repositories": {"main": [[{"node": "Latest Release", "type": "main", "index": 0}]]},
+    "Latest Release": {"main": [[{"node": "Compare Release", "type": "main", "index": 0}]]},
+    "Compare Release": {"main": [[{"node": "New Release?", "type": "main", "index": 0}]]},
+    "New Release?": {"main": [[{"node": "Send Release Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}

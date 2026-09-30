@@ -1,0 +1,57 @@
+{
+  "name": "Production - PostgreSQL Backup Verifier",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "postgres-backup-verifier", "responseMode": "onReceived", "options": {}},
+      "id": "1b2c3d4e-2222-4000-8000-pgbackup0001",
+      "name": "Backup Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-640, 200],
+      "webhookId": "postgres-backup-verifier"
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"minimum_bytes\": 1048576,\n  \"maximum_age_minutes\": 1440,\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "1b2c3d4e-2222-4000-8000-pgbackup0002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-420, 200]
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst event = $('Backup Event').first().json.body ?? $('Backup Event').first().json;\nconst completedAt = new Date(event.completed_at);\nconst ageMinutes = Number.isNaN(completedAt.valueOf()) ? Infinity : (Date.now() - completedAt.valueOf()) / 60000;\nconst size = Number(event.size_bytes || 0);\nconst checksumOk = event.checksum_ok === true;\nconst restoreTestOk = event.restore_test_ok === true;\nconst valid = event.status === 'success' && size >= Number(cfg.minimum_bytes) && ageMinutes <= Number(cfg.maximum_age_minutes) && checksumOk && restoreTestOk;\nconst failures = [];\nif (event.status !== 'success') failures.push('backup status is not success');\nif (size < Number(cfg.minimum_bytes)) failures.push('backup is unexpectedly small');\nif (ageMinutes > Number(cfg.maximum_age_minutes)) failures.push('backup is stale or missing a valid timestamp');\nif (!checksumOk) failures.push('checksum was not verified');\nif (!restoreTestOk) failures.push('restore test did not pass');\nreturn [{ json: { database: event.database || 'unknown', valid, size_bytes: size, completed_at: event.completed_at || null, failures, content: valid ? '' : `🚨 PostgreSQL backup verification failed for **${event.database || 'unknown'}**: ${failures.join('; ')}.` } }];"},
+      "id": "1b2c3d4e-2222-4000-8000-pgbackup0003",
+      "name": "Verify Backup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-180, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "backup-condition", "leftValue": "={{ $json.valid }}", "rightValue": "", "operator": {"type": "boolean", "operation": "false", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "1b2c3d4e-2222-4000-8000-pgbackup0004",
+      "name": "Invalid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "1b2c3d4e-2222-4000-8000-pgbackup0005",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [300, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Backup Event": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Verify Backup", "type": "main", "index": 0}]]},
+    "Verify Backup": {"main": [[{"node": "Invalid?", "type": "main", "index": 0}]]},
+    "Invalid?": {"main": [[{"node": "Send Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}

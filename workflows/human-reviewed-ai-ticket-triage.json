@@ -1,0 +1,70 @@
+{
+  "name": "Production - Human Reviewed AI Ticket Triage",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "ai-ticket-triage", "responseMode": "responseNode", "options": {}},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0001",
+      "name": "New Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-700, 200],
+      "webhookId": "ai-ticket-triage"
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"model\": \"gpt-4.1-mini\",\n  \"review_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\",\n  \"confidence_threshold\": 0.85\n}", "options": {}},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-480, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "https://api.openai.com/v1/chat/completions", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { model: $('Config').first().json.model, response_format: { type: 'json_object' }, temperature: 0, messages: [ { role: 'system', content: 'Classify the support ticket. Return valid JSON only with category, priority, confidence from 0 to 1, summary, and suggested_reply. Never claim that any action was taken.' }, { role: 'user', content: JSON.stringify($('New Ticket').first().json.body ?? $('New Ticket').first().json) } ] } }}", "options": {"timeout": 30000}},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0003",
+      "name": "AI Classification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-240, 200],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst ticket = $('New Ticket').first().json.body ?? $('New Ticket').first().json;\nlet parsed = {};\ntry { parsed = JSON.parse($json?.choices?.[0]?.message?.content || '{}'); } catch {}\nconst confidence = Number(parsed.confidence || 0);\nconst risky = /refund|billing|legal|password|security|delete|contract/i.test(`${ticket.subject || ''} ${ticket.body || ticket.message || ''}`);\nconst needsReview = confidence < Number(cfg.confidence_threshold || 0.85) || risky;\nconst summary = String(parsed.summary || 'AI classification unavailable');\nconst suggested = String(parsed.suggested_reply || 'No draft reply was generated.');\nreturn [{ json: { ticket_id: ticket.id || ticket.ticket_id || 'unknown', category: parsed.category || 'unclassified', priority: parsed.priority || 'normal', confidence, needs_review: needsReview, summary, suggested_reply: suggested, content: `🧑‍⚖️ **Ticket review required**\nID: ${ticket.id || ticket.ticket_id || 'unknown'}\nCategory: ${parsed.category || 'unclassified'}\nPriority: ${parsed.priority || 'normal'}\nConfidence: ${confidence}\nSummary: ${summary}\nSuggested reply (not sent): ${suggested}` } }];"},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0004",
+      "name": "Apply Review Policy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.review_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0005",
+      "name": "Send To Review Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [240, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { accepted: true, ticket_id: $('Apply Review Policy').first().json.ticket_id, status: 'queued_for_human_review' } }}", "options": {}},
+      "id": "4e5f6a7b-5555-4000-8000-aitriage0006",
+      "name": "Acknowledge Ticket",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [480, 200]
+    }
+  ],
+  "connections": {
+    "New Ticket": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "AI Classification", "type": "main", "index": 0}]]},
+    "AI Classification": {"main": [[{"node": "Apply Review Policy", "type": "main", "index": 0}]]},
+    "Apply Review Policy": {"main": [[{"node": "Send To Review Queue", "type": "main", "index": 0}]]},
+    "Send To Review Queue": {"main": [[{"node": "Acknowledge Ticket", "type": "main", "index": 0}]]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}

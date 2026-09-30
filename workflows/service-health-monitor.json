@@ -1,0 +1,78 @@
+{
+  "name": "Production - Service Health Monitor",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 5}]}},
+      "id": "9a1b2c3d-1111-4000-8000-health000001",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-720, 200]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"services\": [\n    {\"name\": \"n8n\", \"url\": \"https://n8n.example.com/healthz\"},\n    {\"name\": \"API\", \"url\": \"https://api.example.com/health\"}\n  ],\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "9a1b2c3d-1111-4000-8000-health000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-500, 200]
+    },
+    {
+      "parameters": {"jsCode": "const services = $('Config').first().json.services;\nif (!Array.isArray(services)) throw new Error('Config.services must be an array');\nreturn services.filter(s => s?.name && /^https?:\\/\\//.test(String(s.url))).map(s => ({ json: { service: String(s.name), url: String(s.url) } }));"},
+      "id": "9a1b2c3d-1111-4000-8000-health000003",
+      "name": "Expand Services",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, 200]
+    },
+    {
+      "parameters": {"url": "={{ $json.url }}", "options": {"timeout": 10000, "response": {"response": {"fullResponse": true, "neverError": true, "responseFormat": "text"}}}},
+      "id": "9a1b2c3d-1111-4000-8000-health000004",
+      "name": "Check Endpoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-40, 200],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const targets = $('Expand Services').all();\nreturn $input.all().map((item, index) => {\n  const target = targets[index]?.json || {};\n  const status = Number(item.json?.statusCode ?? item.json?.status ?? 0);\n  const healthy = status >= 200 && status < 400 && !item.json?.error;\n  return { json: { ...target, status, healthy, checked_at: new Date().toISOString(), content: healthy ? '' : `🚨 **${target.service || 'Service'}** is unhealthy (${status || 'request failed'}): ${target.url}` } };\n});"},
+      "id": "9a1b2c3d-1111-4000-8000-health000005",
+      "name": "Evaluate Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "health-condition", "leftValue": "={{ $json.healthy }}", "rightValue": "", "operator": {"type": "boolean", "operation": "false", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "9a1b2c3d-1111-4000-8000-health000006",
+      "name": "Unhealthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "9a1b2c3d-1111-4000-8000-health000007",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Expand Services", "type": "main", "index": 0}]]},
+    "Expand Services": {"main": [[{"node": "Check Endpoint", "type": "main", "index": 0}]]},
+    "Check Endpoint": {"main": [[{"node": "Evaluate Health", "type": "main", "index": 0}]]},
+    "Evaluate Health": {"main": [[{"node": "Unhealthy?", "type": "main", "index": 0}]]},
+    "Unhealthy?": {"main": [[{"node": "Send Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}
