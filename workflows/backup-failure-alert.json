@@ -1,0 +1,67 @@
+{
+  "name": "Production - Backup Failure Alert",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "backup-events", "responseMode": "responseNode", "options": {}},
+      "id": "47db78da-f8af-4050-86fb-backup000001",
+      "name": "Backup Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-620, 200],
+      "webhookId": "backup-events"
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "47db78da-f8af-4050-86fb-backup000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-400, 200]
+    },
+    {
+      "parameters": {"jsCode": "const input = $('Backup Event Webhook').first().json;\nconst body = input.body || input;\nconst rawStatus = body.status ?? body.state ?? body.result ?? '';\nconst status = String(rawStatus).trim().toLowerCase();\nconst success = ['success','succeeded','ok','completed','complete'].includes(status);\nconst job = String(body.job || body.name || body.backup || 'unknown backup');\nconst message = String(body.message || body.error || body.reason || 'No error detail supplied.');\nconst host = String(body.host || body.hostname || 'unknown host');\nconst finished = String(body.finished_at || body.timestamp || new Date().toISOString());\nreturn [{ json: { failed: Boolean(status) && !success, status: status || 'missing', job, host, finished_at: finished, content: `🚨 **Backup failed**\\nJob: **${job}**\\nHost: ${host}\\nStatus: ${status || 'missing'}\\nTime: ${finished}\\n${message}`.slice(0, 1900) } }];"},
+      "id": "47db78da-f8af-4050-86fb-backup000003",
+      "name": "Normalize Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-180, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "backup-condition", "leftValue": "={{ $json.failed }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "47db78da-f8af-4050-86fb-backup000004",
+      "name": "Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "47db78da-f8af-4050-86fb-backup000005",
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [300, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { accepted: true, alerted: $json.failed === true, job: $json.job || 'unknown' } }}", "options": {"responseCode": 202}},
+      "id": "47db78da-f8af-4050-86fb-backup000006",
+      "name": "Acknowledge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [540, 200]
+    }
+  ],
+  "connections": {
+    "Backup Event Webhook": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Normalize Event", "type": "main", "index": 0}]]},
+    "Normalize Event": {"main": [[{"node": "Failed?", "type": "main", "index": 0}]]},
+    "Failed?": {"main": [[{"node": "Send Failure Alert", "type": "main", "index": 0}], [{"node": "Acknowledge", "type": "main", "index": 0}]]},
+    "Send Failure Alert": {"main": [[{"node": "Acknowledge", "type": "main", "index": 0}]]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"}
+}

@@ -1,0 +1,48 @@
+{
+  "name": "Production - Deterministic GitHub Issue Triage",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "github-issue-triage", "responseMode": "onReceived", "options": {}},
+      "id": "36ca67c9-e79f-4f4f-97fc-github000001",
+      "name": "GitHub Issues Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-520, 200],
+      "webhookId": "github-issue-triage"
+    },
+    {
+      "parameters": {"jsCode": "const payload = $json.body || $json;\nconst action = String(payload.action || '');\nconst issue = payload.issue || {};\nconst repo = String(payload.repository?.full_name || '');\nconst process = ['opened','reopened'].includes(action) && /^[-A-Za-z0-9_.]+\\/[-A-Za-z0-9_.]+$/.test(repo) && Number.isInteger(issue.number);\nconst text = `${issue.title || ''}\\n${issue.body || ''}`.toLowerCase();\nconst rules = [\n  { label: 'bug', words: ['bug','error','crash','broken','exception','regression','fails'] },\n  { label: 'documentation', words: ['docs','documentation','readme','typo','example'] },\n  { label: 'question', words: ['question','how do i','how to','help','?'] },\n  { label: 'enhancement', words: ['feature','enhancement','request','proposal','support for'] },\n];\nconst match = rules.find(r => r.words.some(word => text.includes(word)));\nreturn [{ json: { process, repo, issue_number: issue.number, label: match?.label || 'needs-triage', title: issue.title || '', sender: payload.sender?.login || 'unknown' } }];"},
+      "id": "36ca67c9-e79f-4f4f-97fc-github000002",
+      "name": "Classify Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "github-condition", "leftValue": "={{ $json.process }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "36ca67c9-e79f-4f4f-97fc-github000003",
+      "name": "Should Process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-40, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.issue_number }}/labels", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Accept", "value": "application/vnd.github+json"}, {"name": "X-GitHub-Api-Version", "value": "2022-11-28"}]}, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { labels: [$json.label] } }}", "options": {"timeout": 15000}},
+      "id": "36ca67c9-e79f-4f4f-97fc-github000004",
+      "name": "Apply Label",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [200, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "GitHub Issues Webhook": {"main": [[{"node": "Classify Issue", "type": "main", "index": 0}]]},
+    "Classify Issue": {"main": [[{"node": "Should Process?", "type": "main", "index": 0}]]},
+    "Should Process?": {"main": [[{"node": "Apply Label", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"}
+}

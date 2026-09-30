@@ -1,0 +1,78 @@
+{
+  "name": "Production - Domain Expiry Monitor",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "15 7 * * *"}]}},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000001",
+      "name": "Every Day",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 200]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"domains\": [\"example.com\", \"example.org\"],\n  \"warning_days\": 30,\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-480, 200]
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst domains = Array.isArray(cfg.domains) ? cfg.domains : [];\nreturn domains.map(domain => ({ json: { domain: String(domain).trim().toLowerCase() } })).filter(i => /^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(i.json.domain));"},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000003",
+      "name": "Expand Domains",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-260, 200]
+    },
+    {
+      "parameters": {"url": "=https://rdap.org/domain/{{ $json.domain }}", "options": {"timeout": 20000, "batching": {"batch": {"batchSize": 3, "batchInterval": 500}}}},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000004",
+      "name": "RDAP Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-20, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst sources = $('Expand Domains').all();\nreturn $input.all().map((item, index) => {\n  const domain = sources[index]?.json?.domain || 'unknown';\n  const events = Array.isArray(item.json?.events) ? item.json.events : [];\n  const event = events.find(e => /expir/i.test(String(e.eventAction || '')));\n  const expires = event?.eventDate ? new Date(event.eventDate) : null;\n  const days = expires && !Number.isNaN(expires.valueOf()) ? Math.ceil((expires - new Date()) / 86400000) : null;\n  const should_alert = days !== null && days <= Number(cfg.warning_days || 30);\n  return { json: { domain, expires_at: expires?.toISOString() || null, days_remaining: days, should_alert, content: should_alert ? `⚠️ **${domain}** expires in **${days} days** (${expires.toISOString().slice(0,10)}).` : '' } };\n});"},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000005",
+      "name": "Evaluate Expiry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "domain-condition", "leftValue": "={{ $json.should_alert }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000006",
+      "name": "Expiring Soon?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "25bf56b8-d68f-4e3e-88fd-domain000007",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [700, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every Day": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Expand Domains", "type": "main", "index": 0}]]},
+    "Expand Domains": {"main": [[{"node": "RDAP Lookup", "type": "main", "index": 0}]]},
+    "RDAP Lookup": {"main": [[{"node": "Evaluate Expiry", "type": "main", "index": 0}]]},
+    "Evaluate Expiry": {"main": [[{"node": "Expiring Soon?", "type": "main", "index": 0}]]},
+    "Expiring Soon?": {"main": [[{"node": "Send Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}
