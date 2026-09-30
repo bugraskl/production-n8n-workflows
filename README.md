@@ -14,8 +14,7 @@ Small, readable n8n automations for self-hosters and small teams. Each workflow 
 | [Domain expiry monitor](docs/domain-expiry-monitor.md) | Warns before domain registration expires | RDAP, Discord-compatible webhook |
 | [GitHub issue triage](docs/github-issue-triage.md) | Applies deterministic labels to new issues | GitHub webhook and REST API |
 | [Backup failure alert](docs/backup-failure-alert.md) | Normalizes backup events and alerts only on failure | Any backup tool, Discord-compatible webhook |
-
-The fifth workflow, a stateful website change monitor, is developed through a real pull request so the repository history stays reviewable.
+| [Website change monitor](docs/website-change-monitor.md) | Keeps a private hash baseline and alerts when page text changes | Any public website, Discord-compatible webhook |
 
 ## Quick start
 

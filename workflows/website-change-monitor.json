@@ -1,0 +1,78 @@
+{
+  "name": "Production - Website Change Monitor",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "*/30 * * * *"}]}},
+      "id": "58ec89eb-a9bf-4161-95fa-website000001",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 200]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\n  \"urls\": [\n    \"https://example.com/\",\n    \"https://www.iana.org/help/example-domains\"\n  ],\n  \"alert_webhook_url\": \"https://discord.com/api/webhooks/REPLACE_ME\"\n}", "options": {}},
+      "id": "58ec89eb-a9bf-4161-95fa-website000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-480, 200]
+    },
+    {
+      "parameters": {"jsCode": "const cfg = $('Config').first().json;\nconst urls = Array.isArray(cfg.urls) ? cfg.urls : [];\nreturn urls.map(url => String(url).trim()).filter(url => /^https?:\\/\\//i.test(url)).map(url => ({ json: { url } }));"},
+      "id": "58ec89eb-a9bf-4161-95fa-website000003",
+      "name": "Expand URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-260, 200]
+    },
+    {
+      "parameters": {"url": "={{ $json.url }}", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "User-Agent", "value": "production-n8n-workflows/1.0 website-change-monitor"}]}, "options": {"timeout": 20000, "batching": {"batch": {"batchSize": 3, "batchInterval": 500}}, "response": {"response": {"fullResponse": true, "neverError": true, "responseFormat": "text"}}}},
+      "id": "58ec89eb-a9bf-4161-95fa-website000004",
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-20, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const sources = $('Expand URLs').all();\nconst state = $getWorkflowStaticData('global');\nstate.pageHashes = state.pageHashes || {};\nconst hash = text => {\n  let h = 2166136261;\n  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }\n  return (h >>> 0).toString(16).padStart(8, '0');\n};\nreturn $input.all().map((item, index) => {\n  const url = sources[index]?.json?.url || 'unknown';\n  const status = Number(item.json?.statusCode || 200);\n  const raw = item.json?.body ?? item.json?.data ?? '';\n  if (status < 200 || status >= 400 || typeof raw !== 'string' || !raw.length) {\n    return { json: { url, status, changed: false, error: 'Page could not be read; baseline was kept.' } };\n  }\n  const normalized = raw.replace(/\\s+/g, ' ').trim();\n  const current = hash(normalized);\n  const previous = state.pageHashes[url] || null;\n  const changed = previous !== null && previous !== current;\n  state.pageHashes[url] = current;\n  return { json: { url, status, changed, baseline_created: previous === null, previous_hash: previous, current_hash: current, content: changed ? `🔎 **Website changed**\\n${url}\\nPrevious: \\`${previous}\\`\\nCurrent: \\`${current}\\`` : '' } };\n});"},
+      "id": "58ec89eb-a9bf-4161-95fa-website000005",
+      "name": "Compare With Baseline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"id": "website-condition", "leftValue": "={{ $json.changed }}", "rightValue": "", "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "id": "58ec89eb-a9bf-4161-95fa-website000006",
+      "name": "Changed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{ $('Config').first().json.alert_webhook_url }}", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { content: $json.content } }}", "options": {"timeout": 15000}},
+      "id": "58ec89eb-a9bf-4161-95fa-website000007",
+      "name": "Send Change Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [700, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {"main": [[{"node": "Config", "type": "main", "index": 0}]]},
+    "Config": {"main": [[{"node": "Expand URLs", "type": "main", "index": 0}]]},
+    "Expand URLs": {"main": [[{"node": "Fetch Page", "type": "main", "index": 0}]]},
+    "Fetch Page": {"main": [[{"node": "Compare With Baseline", "type": "main", "index": 0}]]},
+    "Compare With Baseline": {"main": [[{"node": "Changed?", "type": "main", "index": 0}]]},
+    "Changed?": {"main": [[{"node": "Send Change Alert", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1", "timezone": "UTC"}
+}
